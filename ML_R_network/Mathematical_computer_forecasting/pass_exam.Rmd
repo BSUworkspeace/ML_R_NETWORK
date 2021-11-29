@@ -1,0 +1,381 @@
+---
+title: "pass_test Data processing 40%-liyu, 20%-collaboration,model prediction 40%-zhaohongqiang "
+author: "zhao hongqiang"
+date: "6/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(zoo)
+library(fpp2)
+library(xlsx)
+library(tseries)
+library(dplyr)
+library(tidyr)
+proc_data <- function(xlsx,foodnames,indexs) {
+datas = read.xlsx(xlsx,sheetIndex = indexs,startRow = 2)
+alldata = data.frame(
+  vol  = datas[,c(paste("VOL_FRESH." , foodnames,sep = ""))],
+  pr = datas[,c(paste("PR_FRESH.",foodnames,sep = ""))],
+  date = as.Date(time(ts(datas$PR_FRESH.DOUGHNUTS,frequency = 12 ,start = c(2004,7))))
+)%>%
+  separate(date ,into=c("year","month","day"),sep = "-",remove = F)
+alldata$turnover = alldata$vol*alldata$pr
+alldata$quarters = quarters(alldata$date)
+return(alldata)
+}
+proc_ts_data <- function(datas) {
+  month_vol = ts(datas[,"vol"],frequency = 12,start = c(2004,7))
+  month_turn=ts(datas[,"turnover"],frequency = 12,start = c(2004,7))
+  month_pr = ts(datas[,"pr"],frequency = 12,start = c(2004,7))
+  
+  
+  quarters_turn = ts((datas%>% group_by(year,quarters) %>%  
+                             summarise(turnover=sum(turnover),.groups = 'drop'))[,'turnover'],frequency = 4,start = c(2004,7))
+  quarters_vol = ts((datas%>% group_by(year,quarters) %>%  
+                            summarise(vol=sum(vol),.groups = 'drop'))[,'vol'],frequency = 4,start = c(2004,7))
+  quarters_pr = ts((datas%>% group_by(year,quarters) %>%  
+                           summarise(pr=sum(pr),.groups = 'drop'))[,'pr'],frequency = 4,start = c(2004,7))
+  
+  years_turn = ts(
+    (datas%>% group_by(year) %>%  
+       summarise(turnover=sum(turnover)))[,'year'],frequency = 1,start = c(2004))
+  years_pr = ts(
+    (datas%>% group_by(year) %>%  
+       summarise(pr=sum(pr)))[,'pr'],frequency = 1,start = c(2004))
+  years_vol = ts(
+    (datas%>% group_by(year) %>%  
+       summarise(vol=sum(vol)))[,'vol'],frequency = 1,start = c(2004))
+  
+  out = list(
+    month_vol,month_pr,month_turn,
+    years_turn,years_vol,years_pr,
+    quarters_pr,quarters_turn,quarters_vol
+  )
+  
+  return(out)
+}
+```
+
+# Sales Data Forecast
+
+
+## 1.Data process
+
+### 1.1 Statistics data at year season and month
+
+```{r}
+mass_data = proc_data(xlsx = './Data_for_test.xlsx',"DOUGHNUTS",1)
+
+### food data porcess 
+food_data = proc_data(xlsx = './Data_for_test.xlsx',"DOUGHNUTS",2)
+### drug data porcess 
+
+drug_data = proc_data(xlsx = './Data_for_test.xlsx',"DOUGHNUTS",3)
+
+```
+
+### 1.2 used TS func convert time series
+
+```{r}
+#    1：2：3=month_vol,month_pr,month_turn,
+#    4；5；6=years_vol,years_pr,years_turn,
+#   7：8：9=quarters_vol,quarters_pr,quarters_turn
+mass=proc_ts_data(mass_data)
+food= proc_ts_data(food_data)
+drug= proc_ts_data(drug_data)
+head(food[[2]])
+```
+
+
+## 2Forecast
+
+### 2.1 time regression for year turnover data
+
+```{r}
+
+autoplot(mass[[4]],main = "mass_vol")
+autoplot(mass[[5]],main = "mass_pr")
+autoplot(mass[[6]],main = "mass_turn")
+autoplot(food[[4]],main = "food_vol")
+autoplot(food[[5]],main = "food_pr")
+autoplot(food[[6]],main = "food_turn")
+autoplot(drug[[4]],main = "drug_vol")
+autoplot(drug[[5]],main = "drug_pr")
+autoplot(drug[[6]],main = "drug_turn")
+## used tslm for year data
+fc_tsml <- function(datas) {
+  fc_year <- tslm(datas ~ trend )
+fcast <- forecast(datas, h=3)
+autoplot(fcast)
+ return(fcast)
+}
+fc_year_mass_vol = fc_tsml(mass[[4]])
+autoplot(fc_year_mass_vol,main="MASS Year VOL Forecast")
+fc_year_mass_pr = fc_tsml(mass[[5]])
+autoplot(fc_year_mass_pr,main="MASS Year PR Forecast")
+fc_year_mass_turn = fc_tsml(mass[[6]])
+autoplot(fc_year_mass_turn,main="MASS Year TURNOVER Forecast")
+
+fc_year_food_vol = fc_tsml(food[[4]])
+autoplot(fc_year_food_vol,main="FOOD Year VOL Forecast")
+fc_year_food_pr = fc_tsml(food[[5]])
+autoplot(fc_year_food_pr,main="FOOD Year PR Forecast")
+fc_year_food_turn = fc_tsml(food[[6]])
+autoplot(fc_year_food_turn,main="FOOD Year TURNOVER Forecast")
+
+fc_year_drug_vol = fc_tsml(drug[[4]])
+autoplot(fc_year_drug_vol,main="DRUG Year VOL Forecast")
+fc_year_drug_pr = fc_tsml(drug[[5]])
+autoplot(fc_year_drug_pr,main="DRUG Year PR Forecast")
+fc_year_drug_turn = fc_tsml(drug[[6]])
+autoplot(fc_year_drug_turn,main="DRUG Year TURNOVER Forecast")
+
+```
+### 2.2 Forecast season Data at ARIMA model
+
+#### Manual ARIMA analysis of drug turnover data to predict outcomes over three years
+
+```{r}
+autoplot(drug[[9]])
+ggseasonplot(drug[[9]])
+ndiffs(drug[[9]])
+nsdiffs(drug[[9]])
+# the result shows need 1 seasonal diff and 1 diff
+drug[[9]]%>% diff(lag=4) %>% diff()%>% ggtsdisplay(main="")
+auto.arima(drug[[9]])
+# the auto arima used 1,0,0,  seasonal 0,1,0
+drug[[9]]%>%
+  Arima(order=c(1,1,0),seasonal=c(0,1,0))
+### 1,1,0 AICc = 393.55
+drug[[9]]%>%
+  Arima(order=c(0,1,1),seasonal=c(0,1,0))
+### 0,1,1   AICc=393.53 
+
+drug[[9]]%>%
+  Arima(order=c(0,1,1),seasonal=c(0,1,0)) %>%
+  residuals() %>%
+  ggtsdisplay()
+# the 0,1,0 AICc value is smaller so choose 0,1,0
+drug[[9]]%>%
+  Arima(order=c(0,1,1),seasonal=c(0,1,0))->fit3
+checkresiduals(fit3)
+fit3 %>% forecast(h=12) %>% autoplot()
+```
+ 
+###  used auto model Forecast data 
+
+```{r}
+autoplot(mass[[7]])
+autoplot(mass[[8]])
+autoplot(mass[[9]])
+autoplot(food[[7]])
+autoplot(food[[8]])
+autoplot(food[[9]])
+autoplot(drug[[7]])
+autoplot(drug[[8]])
+autoplot(drug[[9]])
+
+arima_model <- function(datas) {
+  arima_data =  auto.arima(datas)
+  fc_arima = forecast(
+  arima_data,
+  h = 12
+)
+  return(fc_arima)
+}
+fc_season_mass_vol = arima_model(mass[[7]])
+autoplot(fc_season_mass_vol,main="MASS Season VOL Forecast at ARIMA model")
+fc_season_mass_pr = arima_model(mass[[8]])
+autoplot(fc_season_mass_pr,main="MASS Season PR Forecast at ARIMA model")
+fc_season_mass_turn = arima_model(mass[[9]])
+autoplot(fc_season_mass_turn,main="MASS Season TURNOVER Forecast at ARIMA model")
+fc_season_food_vol = arima_model(food[[7]])
+autoplot(fc_season_food_vol,main="FOOD Season VOL Forecast at ARIMA model")
+fc_season_food_pr = arima_model(food[[8]])
+autoplot(fc_season_food_pr,main="FOOD Season PR Forecast at ARIMA model")
+fc_season_food_turn = arima_model(food[[9]])
+autoplot(fc_season_food_turn,main="FOOD Season TURNOVER Forecast at ARIMA model")
+fc_season_drug_vol = arima_model(drug[[7]])
+autoplot(fc_season_drug_vol,main="DRUG Season VOL Forecast at ARIMA model")
+fc_season_drug_pr = arima_model(drug[[8]])
+autoplot(fc_season_drug_pr,main="DRUG Season PR Forecast at ARIMA model")
+fc_season_drug_turn = arima_model(drug[[9]])
+autoplot(fc_season_drug_turn,main="DRUG Season TURNOVER Forecast at ARIMA model")
+
+```
+
+
+
+
+
+### 2.3 Forecast month Data uesd Holt-Winters multiplicative model
+
+#### Divide the data into a test set training set and use the aucc function to check the accuracy of the results
+
+```{r}
+turn_train <- subset(drug[[1]],
+                         end = length(drug[[1]]) - 36)
+turn_test <- subset(drug[[1]],
+                        start = length(drug[[1]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+
+turn_train <- subset(drug[[2]],
+                         end = length(drug[[2]]) - 36)
+turn_test <- subset(drug[[2]],
+                        start = length(drug[[3]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+turn_train <- subset(drug[[3]],
+                         end = length(drug[[3]]) - 36)
+turn_test <- subset(drug[[3]],
+                        start = length(drug[[3]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+############
+turn_train <- subset(mass[[1]],
+                         end = length(mass[[1]]) - 36)
+turn_test <- subset(mass[[1]],
+                        start = length(mass[[1]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+
+turn_train <- subset(mass[[2]],
+                         end = length(mass[[2]]) - 36)
+turn_test <- subset(mass[[2]],
+                        start = length(mass[[3]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+turn_train <- subset(mass[[3]],
+                         end = length(mass[[3]]) - 36)
+turn_test <- subset(mass[[3]],
+                        start = length(mass[[3]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+######
+turn_train <- subset(food[[1]],
+                         end = length(food[[1]]) - 36)
+turn_test <- subset(food[[1]],
+                        start = length(food[[1]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+
+turn_train <- subset(food[[2]],
+                         end = length(food[[2]]) - 36)
+turn_test <- subset(food[[2]],
+                        start = length(food[[3]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+
+turn_train <- subset(food[[3]],
+                         end = length(food[[3]]) - 36)
+turn_test <- subset(food[[3]],
+                        start = length(food[[3]]) - 35)
+hw_mul_turn_train <- hw(turn_train,
+                            h = 36,
+                            seasonal = "multiplicative")
+autoplot(hw_mul_turn_train)
+accuracy(hw_mul_turn_train, turn_test)
+checkresiduals(hw_mul_turn_train)
+
+```
+
+
+
+#### Automated forecasting using data models directly
+
+
+```{r}
+autoplot(mass[[1]],main = "mass_vol")
+autoplot(mass[[2]],main = "mass_pr")
+autoplot(mass[[3]],main = "mass_turn")
+autoplot(food[[1]],main = "food_vol")
+autoplot(food[[2]],main = "food_pr")
+autoplot(food[[3]],main = "food_turn")
+autoplot(drug[[1]],main = "drug_vol")
+autoplot(drug[[2]],main = "drug_pr")
+autoplot(drug[[3]],main = "drug_turn")
+
+hw_model <- function(datas) {
+  hw_mul <- hw(datas,
+                            h = 36,
+                            seasonal = "multiplicative")
+  return(hw_mul)
+}
+fc_month_mass_vol = hw_model(mass[[1]])
+autoplot(fc_month_mass_vol,main="MASS month VOL Forecast at Holt-Winters multiplicative model")
+fc_month_mass_pr = hw_model(mass[[2]])
+autoplot(fc_month_mass_pr,main="MASS month PR Forecast at Holt-Winters multiplicative model")
+fc_month_mass_turn = hw_model(mass[[3]])
+autoplot(fc_month_mass_turn,main="MASS month TURNOVER Forecast at Holt-Winters multiplicative model")
+fc_month_food_vol = hw_model(food[[1]])
+autoplot(fc_month_food_vol,main="FOOD month VOL Forecast at Holt-Winters multiplicative model")
+fc_month_food_pr = hw_model(food[[2]])
+autoplot(fc_month_food_pr,main="FOOD month PR Forecast at Holt-Winters multiplicative model")
+fc_month_food_turn = hw_model(food[[3]])
+autoplot(fc_month_food_turn,main="FOOD month TURNOVER Forecast at Holt-Winters multiplicative model")
+fc_month_drug_vol = hw_model(drug[[1]])
+autoplot(fc_month_drug_vol,main="DRUG month VOL Forecast at Holt-Winters multiplicative model")
+fc_month_drug_pr = hw_model(drug[[2]])
+autoplot(fc_month_drug_pr,main="DRUG month PR Forecast at Holt-Winters multiplicative model")
+fc_month_drug_turn = hw_model(drug[[3]])
+autoplot(fc_month_drug_turn,main="DRUG month TURNOVER Forecast at Holt-Winters multiplicative model")
+```
+
+
+
+
+
+
+
+
+
+
